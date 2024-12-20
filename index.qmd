@@ -14,17 +14,16 @@ license: "CC-BY-SA-4.0"
 
 # Introduction
 
-This tutorial is a brief introduction to causal inference with a focus on how to choose "control variables" in a Bayesian regression analysis, and a very brief introduction to using causal discovery algorithms to identify causal structure in data. It presumes knowledge of fitting Bayesian regression models with `brms` [@brms], but the methods discussed here also apply to linear regression.
+This tutorial is a brief introduction to causal inference with a focus on how to choose "control variables" in a regression analysis, and a very brief introduction to using causal discovery algorithms to identify causal structure in data.
 
-For more detailed coverage of causal inference, see @rohrer2018thinking or @hernan2024causal. @malinsky2018causal provides a good introduction to causal discovery methods.
+For more detailed coverage of causal inference, see @rohrer2018thinking, @pearl2009, or @hernan2024causal. @malinsky2018causal provides a good introduction to causal discovery methods.
 
 We'll be using the following R libraries:
 
 ```{r, message=FALSE, cache=FALSE}
-library(brms)
 library(lme4)
 library(tidyverse)
-library(tidybayes)
+library(sjPlot)
 library(broom)
 library(arm)
 library(DT)
@@ -37,7 +36,7 @@ library(igraph)
 
 ## Data
 
-In this tutorial, we'll be looking at the `english` dataset from `languageR`. To keep things simple, we'll only use a subset of the variables included in this data:
+In this tutorial, we'll be looking at the `english` dataset from `languageR`. To learn more about the dataset, run `?english` in R, or see @baayen2008. To keep things simple, we'll only use a subset of the variables included in this data:
 
 - `RTlexdec`: Reaction time in a lexical decision task
 - `WrittenFrequency`: Log frequency from the CELEX lexical database
@@ -117,32 +116,19 @@ We want to know the effect of `WrittenFrequency` on `RTlexdec`. There are severa
 
 #### 1. Only include the variable of interest.
 
-We only care about the effect of `WrittenFrequency`, so let's exclude everything else from our regression. We'll use default `brms` priors here:
+We only care about the effect of `WrittenFrequency`, so let's exclude everything else from our regression:
 
 ```{r}
-eng_m2 <-
-  brm(
-    data = eng,
-    RTlexdec ~ 1 + WrittenFrequency_c,
-    family = gaussian,
-    file = "models/eng_m2.brm"
-  )
+eng_m2 <- lm(RTlexdec ~ 1 + WrittenFrequency_c, data = eng)
 
-summary(eng_m2)
+tidy(eng_m2, conf.int = TRUE)
 ```
 
 We can plot the partial effect of `WrittenFrequency` against the data. It looks reasonable.
 
 ```{r}
-#| code-fold: true
-eng_m2_ce <- conditional_effects(eng_m2, effects = "WrittenFrequency_c")$WrittenFrequency_c
-
-eng_m2_ce %>% ggplot(aes(x = WrittenFrequency_c, y = estimate__)) +
-  geom_lineribbon(aes(ymin = lower__, ymax = upper__)) +
-  geom_point(aes(x = WrittenFrequency_c, y = RTlexdec), data = eng, size = 0.5) +
-  ylab("RTlexdec") +
-  ggtitle("Partial effect of written frequency") +
-  ylab("RTlexdec: Estimate + 95% CI")
+plot_model(eng_m2, type = "pred", terms = "WrittenFrequency_c") +
+  geom_point(aes(x = WrittenFrequency_c, y = RTlexdec), data = eng, size = 0.5)
 ```
 
 #### 2. Include everything.
@@ -176,31 +162,22 @@ eng %>% ggplot(aes(x = AgeSubject, y = RTlexdec)) +
   geom_smooth(method = "lm")
 ```
 
-All of these variables could reasonable predict `RTlexdec`, so we could include them in a regression:
+All of these variables could reasonably predict `RTlexdec`, so we could include them in a regression:
 
 ```{r}
-eng_m3 <-
-  brm(
-    data = eng,
-    RTlexdec ~ 1 + WrittenFrequency_c + Familiarity_c + FrequencyInitialDiphoneWord_c + AgeSubject_c,
-    family = gaussian,
-    file = "models/eng_m3.brm"
-  )
+eng_m3 <- lm(RTlexdec ~ 1 + WrittenFrequency_c + Familiarity_c + FrequencyInitialDiphoneWord_c + AgeSubject_c, data = eng)
 
-summary(eng_m3)
+tidy(eng_m3, conf.int = TRUE)
 ```
 
-In this model, we see a `WrittenFrequency` effect of -0.7 (95\% CredI: [-0.08, -0.06]). Like the previous model `eng_m2`, this is still negative, but much smaller.
+In this model, we see a `WrittenFrequency` effect of -0.07 (95\% CI: [-0.08, -0.06]). Like the previous model `eng_m2`, this is still negative, but much smaller.
 
 #### 3. Incude the predictors that perform best under some model comparison procedure.
 
-We could also fit multiple models, compare them, and choose the "best" model in our comparison. Using LOO, we would choose `eng_m3`, the model with all variables included.
+We could also fit multiple models, compare them, and choose the "best" model in our comparison. Using AIC, we would choose `eng_m3`, the model with all variables included.
 
 ```{r}
-eng_m2 <- add_criterion(eng_m2, c("loo"))
-eng_m3 <- add_criterion(eng_m3, c("loo"))
-
-loo_compare(eng_m2, eng_m3, criterion = "loo")
+AIC(eng_m2, eng_m3)
 ```
 
 #### 4. Include only the variables needed to make a causal inference.
@@ -222,7 +199,7 @@ As linguists, we have some background knowledge about the `english` dataset, and
 
 3. `WrittenFrequency` is *not* a direct cause of `RTlexdec`: Participants in the experiment don't know the actual frequencies of words in the corpus these frequencies were estimated with, they only know their own `Familiarity` with the words. There is no arrow from `WrittenFrequency` to `RTlexdec`.
 
-4. `WrittenFrequency` is a direct cause of `FrequencyInitialDiphoneWord`: The frequency of whole words is likely to have some influence on the frequency of their initial diphones. This adds an arrow `WrittenFrequency` $rightarrow$ `FrequencyInitialDiphoneWord`.
+4. `WrittenFrequency` is a direct cause of `FrequencyInitialDiphoneWord`: The frequency of whole words is likely to have some influence on the frequency of their initial diphones. This adds an arrow `WrittenFrequency` $\rightarrow$ `FrequencyInitialDiphoneWord`.
 
 5. `FrequencyInitialDiphoneWord` is not a direct cause of anything: `AgeSubject` certainly isn't caused by initial diphone frequency. `Familiarity` depends on knowledge of the *whole* word, not on any diphone frequency -- familiar words can have low-frequency initial diphones. `WrittenFrequency` can't be caused by diphone frequency, because that would add a *cycle* to our DAG.
 
@@ -265,29 +242,17 @@ chain <- tibble(
 If we "control for $B$" in a regression on this data, the causal effect of $A$ on $C$ is masked, even though we know there is a causal relationship. Controlling for $B$ effectively *blocks* the association between $A$ and $C$:
 
 ```{r}
-chain_m1 <-
-  brm(
-    data = chain,
-    C ~ A + B,
-    family = gaussian,
-    file = "models/chain_m1.brm"
-  )
+chain_m1 <- lm(C ~ A + B, data = chain)
 
-summary(chain_m1)
+tidy(chain_m1, conf.int = TRUE)
 ```
 
 In a chain, we shouldn't control for the middle variable $B$ if we're intersted in the causal effect of $A$ on $C$. Removing $B$ from our model, we get a correct estimate of the causal effect:
 
 ```{r}
-chain_m2 <-
-  brm(
-    data = chain,
-    C ~ A,
-    family = gaussian,
-    file = "models/chain_m2.brm"
-  )
+chain_m2 <- lm(C ~ A, data = chain)
 
-summary(chain_m2)
+tidy(chain_m2, conf.int = TRUE)
 ```
 
 
@@ -315,15 +280,9 @@ fork %>% ggplot(aes(x = A, y = C)) +
 But if we fit a model controlling for $B$, we can see that $A$ in fact has no causal effect on $C$. Again, controlling for $B$ blocks the association between $A$ and $C$. Unlike the previous example of a chain, this is desirable -- there is no causal relationship between $A$ and $C$, so we want to block the non-causal association induced by $B$:
 
 ```{r}
-fork_m1 <-
-  brm(
-    data = chain,
-    C ~ A + B,
-    family = gaussian,
-    file = "models/fork_m1.brm"
-  )
+fork_m1 <- lm(C ~ A + B, data = fork)
 
-summary(fork_m1)
+tidy(fork_m1, conf.int = TRUE)
 ```
 
 In a fork, the common cause variable is known as a *confounder*: it can induce spurious correlations and bias measurement of the true causal effect.
@@ -352,29 +311,17 @@ collider %>% ggplot(aes(x = A, y = C)) +
 If we include $B$ in our model, we incorrectly conclude that $A$ has an effect on $C$:
 
 ```{r}
-collider_m1 <-
-  brm(
-    data = collider,
-    C ~ A + B,
-    family = gaussian,
-    file = "models/collider_m1.brm"
-  )
+collider_m1 <- lm(C ~ A + B, data = collider)
 
-summary(collider_m1)
+tidy(collider_m1, conf.int = TRUE)
 ```
 
 Instead, $B$ should be excluded from the model:
 
 ```{r}
-collider_m2 <-
-  brm(
-    data = collider,
-    C ~ A,
-    family = gaussian,
-    file = "models/collider_m2.brm"
-  )
+collider_m2 <- lm(C ~ A, data = collider)
 
-summary(collider_m2)
+tidy(collider_m2, conf.int = TRUE)
 ```
 
 #### Confounding and back-door paths
@@ -404,7 +351,7 @@ In our DAG, there is exactly one path between these variables: `WrittenFrequency
 
 There are no other paths from `WrittenFrequency` to `RTlexdec`, so including any other variables in our regression would only bias our estimate of the effect.
 
-This means we should use our first model, `eng_m2`, to estimate the causal effect of `WrittenFrequency` on `RTlexdec`, although it performed worse in our model comparison. The best *causal* model is not always the same as the best *predictive* model.
+This means we should use our first model, `eng_m2`, to estimate the causal effect of `WrittenFrequency` on `RTlexdec`, although it performed worse in our model comparison. The best *causal* model is not always the same as the best *predictive* model: Including `Familiarity` as a predictor improved the model's performance under AIC, an estimator of prediction error, but confounded our causal effect estimate^[See @arif2022predictive for more discussion of predictive and causal models, written for ecologists.].
 
 
 #### The causal effect of `DiphoneFreq` on `RTlexdec`
@@ -438,30 +385,18 @@ While we have been referring to the additional variables in our analysis as *con
 adjustmentSets(eng_dag)
 ```
 
-This gives us two possible adjustment sets. We can control for either `WrittenFrequency` or `Familiarity` to estimate the causal effect of `DiphoneFreq` on `RTlexdec`. We can fit both models with `brms`:
+This gives us two possible adjustment sets. We can control for either `WrittenFrequency` or `Familiarity` to estimate the causal effect of `DiphoneFreq` on `RTlexdec`. We can fit both models with `lm`:
 
 ```{r}
-eng_m4 <-
-  brm(
-    data = eng,
-    RTlexdec ~ 1 + WrittenFrequency_c + FrequencyInitialDiphoneWord_c,
-    family = gaussian,
-    file = "models/eng_m4.brm"
-  )
+eng_m4 <- lm(RTlexdec ~ 1 + WrittenFrequency_c + FrequencyInitialDiphoneWord_c, data = eng)
 
-summary(eng_m4)
+tidy(eng_m4, conf.int = TRUE)
 ```
 
 ```{r}
-eng_m5 <-
-  brm(
-    data = eng,
-    RTlexdec ~ 1 + Familiarity_c + FrequencyInitialDiphoneWord_c,
-    family = gaussian,
-    file = "models/eng_m5.brm"
-  )
+eng_m5 <- lm(RTlexdec ~ 1 + Familiarity_c + FrequencyInitialDiphoneWord_c, data = eng)
 
-summary(eng_m5)
+tidy(eng_m5, conf.int = TRUE)
 ```
 
 Whether we control for `WrittenFrequency` or `Familiarity`, we get the same result: Initial diphone frequency has no effect on reaction time. This is expected, given our DAG: There is only one path from `DiphoneFreq` to `RTlexdec`, and it contains a fork, so we block it to estimate the causal effects. There are no paths left, so we get zero causal effect.
@@ -480,15 +415,9 @@ adjustmentSets(eng_dag)
 In this case, the adjustment set is empty, because `RTlexdec` is a collider and already blocks the non-causal path between `AgeSubject` and `Familiarity`. Next we fit a model with no control variables:
 
 ```{r}
-eng_m6 <-
-  brm(
-    data = eng,
-    Familiarity_c ~ 1 + AgeSubject_c,
-    family = gaussian,
-    file = "models/eng_m6.brm"
-  )
+eng_m6 <- lm(Familiarity_c ~ 1 + AgeSubject_c, data = eng)
 
-summary(eng_m6)
+tidy(eng_m6, conf.int = TRUE)
 ```
 
 As we would expect, age has no causal effect on familiarty.
@@ -515,15 +444,9 @@ To answer this question, we can fit a model controlling for familiarity. However
 Let's fit the model:
 
 ```{r}
-eng_m7 <-
-  brm(
-    data = eng,
-    RTlexdec ~ 1 + WrittenFrequency_c + Familiarity_c,
-    family = gaussian,
-    file = "models/eng_m7.brm"
-  )
+eng_m7 <- lm(RTlexdec ~ 1 + WrittenFrequency_c + Familiarity_c, data = eng)
 
-summary(eng_m7)
+tidy(eng_m7, conf.int = TRUE)
 ```
 
 `WrittenFrequency` still has a negative effect, even after controlling for `Familiarity`. This result is inconsistent with our DAG. Why? There are multiple possibilities.
